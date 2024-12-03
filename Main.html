@@ -1,0 +1,454 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Main</title>
+<meta name="viewport" content="initial-scale=1,maximum-scale=1,user-scalable=no">
+<link href="https://api.mapbox.com/mapbox-gl-js/v2.12.0/mapbox-gl.css" rel="stylesheet">
+<script src="https://api.mapbox.com/mapbox-gl-js/v2.12.0/mapbox-gl.js"></script>
+<script src='https://unpkg.com/@turf/turf@6/turf.min.js'></script>
+
+<style>
+body { margin: 0; padding: 0; }
+#map { position: absolute; top: 0; bottom: 0; width: 100%; }
+</style>
+</head>
+<body>
+<div id="map"></div>
+<script>
+
+    // https://docs.mapbox.com/mapbox-gl-js/example/simple-map/
+    // https://docs.mapbox.com/playground/directions/
+    // https://turfjs.org/docs/#along
+
+    // test coordinate = [77.07991051709233, 28.451864359237323] for MB
+    //[28.451864359237323, 77.07991051709233] for google maps 
+
+    const throttleTime = 100; // 100 milli secs
+    const Threshold = 0.3
+    let start = null;
+    let end = null;
+
+    const sec43Geojson = {
+      "type": "FeatureCollection", 
+      "features": [
+        {"type": "Feature", "geometry": {"type": "Point", "coordinates": [77.086327, 28.449475]}},
+        {"type": "Feature", "geometry": {"type": "Point", "coordinates": [77.086343, 28.449714]}},
+        {"type": "Feature", "geometry": {"type": "Point", "coordinates": [77.086000, 28.449674]}},
+        {"type": "Feature", "geometry": {"type": "Point", "coordinates": [77.086111, 28.449788]}},
+        {"type": "Feature", "geometry": {"type": "Point", "coordinates": [77.079900, 28.451864]}},
+        {"type": "Feature", "geometry": {"type": "Point", "coordinates": [77.074179, 28.458879]}}, 
+        {"type": "Feature", "geometry": {"type": "Point", "coordinates": [77.095250, 28.463180]}},
+        {"type": "Feature", "geometry": {"type": "Point", "coordinates": [77.079458, 28.447257]}},
+        {"type": "Feature", "geometry": {"type": "Point", "coordinates": [77.073067, 28.467915]}}, 
+        {"type": "Feature", "geometry": {"type": "Point", "coordinates": [77.082674, 28.467969]}},
+        {"type": "Feature", "geometry": {"type": "Point", "coordinates": [77.079479, 28.447366]}},
+        {"type": "Feature", "geometry": {"type": "Point", "coordinates": [77.079479, 28.447366]}},
+        {"type": "Feature", "geometry": {"type": "Point", "coordinates": [77.079536, 28.460021]}},
+        {"type": "Feature", "geometry": {"type": "Point", "coordinates": [77.096463, 28.450085]}},
+        {"type": "Feature", "geometry": {"type": "Point", "coordinates": [77.079655, 28.460225]}},
+        {"type": "Feature", "geometry": {"type": "Point", "coordinates": [77.079511, 28.447299]}},
+        {"type": "Feature", "geometry": {"type": "Point", "coordinates": [77.081581, 28.452134]}}
+      ]
+    };
+
+    function initializeMap() {
+        navigator.geolocation.watchPosition(StartUserLocation, console.error, {
+            enableHighAccuracy: true,
+            timeout: 5000,
+            maximumAge: 0
+        });
+
+        map.on('click',(event) => {
+            end = [event.lngLat.lng, event.lngLat.lat];
+            console.log("Destination set to:", end);
+
+            // Make API call if both start and end points are available
+            if (start && end) {
+                ApiCall(end, start);
+            }
+        });
+    }
+
+  	mapboxgl.accessToken = 'pk.eyJ1IjoicnVpLWZpIiwiYSI6ImNtMDN4bDhpNzAycmEya3IwaG1ma2I2MDUifQ.GNmTlq9S_2YuPj5Uzm-e7g';
+    const map = new mapboxgl.Map({
+        container: 'map', // container ID
+        // Choose from Mapbox's core styles, or make your own style with Mapbox Studio
+        style: 'mapbox://styles/mapbox/streets-v12', // style URL
+        center: [77.079794, 28.451724], // starting position [lng, lat]
+        zoom: 9 // starting zoom
+    });
+
+
+    function StartUserLocation(position) {
+        if (Date.now() - lastUpdateTime < throttleTime) return; // Throttle updates
+        lastUpdateTime = Date.now();
+        start = [position.coords.longitude, position.coords.latitude];
+        console.log("User location updated:", start);
+    }
+
+    let lastUpdateTime = 0;
+    const userPoint = [];
+
+    async function ApiCall (end, start){
+        fetch(`https://api.mapbox.com/directions/v5/mapbox/driving/${start[0]}%2C${start[1]}%3B${end[0]}%2C${end[1]}?alternatives=true&continue_straight=false&geometries=geojson&language=en&overview=full&steps=true&access_token=pk.eyJ1IjoicnVpLWZpIiwiYSI6ImNtMDN4bDhpNzAycmEya3IwaG1ma2I2MDUifQ.GNmTlq9S_2YuPj5Uzm-e7g`).then(resp => resp.json()).then(response => {
+            
+            const routeGeoJSON = {
+            type : "FeatureCollection",
+            features : [{
+                type : "Feature",
+                properties : {
+                distance : response.routes[0].distance,
+                duration : response.routes[0].duration
+                },
+                geometry : response.routes[0].geometry
+            }]
+            }
+
+            const legsGeoJSON = {
+            type : "FeatureCollection",
+            features : response.routes[0].legs[0].steps.map((step) => {
+                return {
+                type : "Feature",
+                properties : {
+                    distance : step.distance
+                },
+                geometry : step.geometry
+                }
+            })
+            }
+
+                console.log(legsGeoJSON);
+
+                function createSegmentBuffer(start, end, bufferWidth) {
+                const line = turf.lineString([start, end]); // Create a LineString for the segment
+                const buffer = turf.buffer(line, bufferWidth, { units: 'degrees' }); // Create a buffer polygon
+                return buffer.geometry.coordinates[0]; // Return the coordinates of the polygon
+            }
+
+            function drawBufferArea(legsGeoJSON, bufferWidth = 0.00003){
+                const bufferFeatures = [];
+
+                for (let feature of legsGeoJSON.features){
+                    const coordinates = feature.geometry.coordinates;
+
+                    for (let i = 0; i < coordinates.length - 1; i++){
+                    const start = coordinates[i];
+                    const end = coordinates[i+1];
+
+                    const bufferPolygonCoords = createSegmentBuffer(start, end, bufferWidth);
+
+                    bufferFeatures.push({
+                        type : 'Feature',
+                        geometry : {
+                        type : 'Polygon',
+                        coordinates : [bufferPolygonCoords]
+                        }
+                    });
+                    }
+                }
+                const bufferGeoJSON = {
+                    type : 'FeatureCollection',
+                    features : bufferFeatures
+                };
+                if (map.getSource('bufferArea')) {
+                    map.getSource('bufferArea').setData(bufferGeoJSON);
+                }
+                else{
+                    map.addSource('bufferArea', {type : 'geojson', data : bufferGeoJSON});
+                    map.addLayer({
+                        id : 'bufferAreaLayer',
+                        type : 'fill',
+                        source : 'bufferArea',
+                        paint : {
+                            'fill-color' : '#ff0084',
+                            'fill-opacity' : 0.3,
+                            'fill-outline-color' : '#ff004c'
+                        }
+                    });
+                }
+                return bufferGeoJSON;
+            }
+
+            const areageojson = drawBufferArea(legsGeoJSON);
+
+            console.log(areageojson);
+
+            /*const matchingPoints = {
+            "type": "FeatureCollection",
+            "features": [{
+                "type": "Feature",
+                "geometry": { 
+                "type": "Point",
+                "coordinates": [] 
+                }
+            }]
+            }*/
+
+            function findAndExportMatchingCoordinates(polygonGeoJSON, pointsGeoJSON) {
+                // Initialize an array to store matching points
+                const matchingPoints = [];
+
+                // Loop through each polygon in the polygonGeoJSON
+                polygonGeoJSON.features.forEach((polygonFeature) => {
+                    // Extract the polygon geometry
+                    const polygon = polygonFeature.geometry;
+
+                    // Create a Turf.js polygon feature
+                    const turfPolygon = turf.polygon(polygon.coordinates);
+
+                    // Find points that fall within this polygon
+                    pointsGeoJSON.features.forEach((pointFeature) => {
+                        const point = turf.point(pointFeature.geometry.coordinates);
+
+                        // Check if the point is inside the polygon
+                        if (turf.booleanPointInPolygon(point, turfPolygon)) {
+                            matchingPoints.push(pointFeature);
+                        }
+                    });
+                });
+
+                // Create a new FeatureCollection for all matching points
+                const matchingPointsGeoJSON = turf.featureCollection(matchingPoints);
+
+                // Export the GeoJSON as a string (ready to save to a file or use directly)
+                const geoJSONOutput = JSON.stringify(matchingPointsGeoJSON, null, 2);
+                const cleanGeoJSON = createCleanedGeoJSON(matchingPointsGeoJSON);
+                console.log(cleanGeoJSON);
+
+                return cleanGeoJSON;
+            }
+
+            function createCleanedGeoJSON(geoJSON) {
+                // Use a Set to track unique geometries
+                const uniqueGeometries = new Set();
+                const cleanedFeatures = [];
+
+                // Iterate through the features
+                geoJSON.features.forEach((feature) => {
+                    // Serialize the geometry as a string to check for uniqueness
+                    const geometryString = JSON.stringify(feature.geometry);
+
+                    if (!uniqueGeometries.has(geometryString)) {
+                        // Add geometry to the set and keep the feature
+                        uniqueGeometries.add(geometryString);
+                        cleanedFeatures.push(feature);
+                    }
+                });
+
+                // Create the cleaned GeoJSON object
+                const cleanedGeoJSON = {
+                    type: "FeatureCollection",
+                    features: cleanedFeatures
+                };
+            
+                return cleanedGeoJSON;
+            }
+
+            const matchedcleanedPointsGeoJSON = findAndExportMatchingCoordinates(areageojson, sec43Geojson);
+
+            // user location stuff
+
+            const geolocate = new mapboxgl.GeolocateControl({
+                positionOptions : {
+                    enableHighAccuracy: true
+                },
+                trackUserLocation : true,
+                showUserLocation : true,
+                trackUserLocation : true,
+                showUserHeading : true
+            })
+
+            map.addControl(geolocate);
+
+            // get user coordinates
+
+            const options = {
+                enableHighAccuracy: true,
+                timeout: 5000,
+                maximumAge: 0,
+            };
+
+            function success(pos) {
+                const crd = pos.coords;
+
+                console.log("Your current position is:");
+                console.log(`Latitude : ${crd.latitude}`);
+                console.log(`Longitude: ${crd.longitude}`);
+                console.log(`More or less ${crd.accuracy} meters.`);
+            }
+
+            function error(err) {
+                console.warn(`ERROR(${err.code}): ${err.message}`);
+            }
+
+            navigator.geolocation.getCurrentPosition(success, error, options);
+
+            // add proximity circle around user
+            // should prob make a geoJSON and make a polygon 
+            
+
+
+            
+            let lastUpdateTime = 0;
+            const userPoint = [];
+
+            function updateUserLocation(position) {
+                if (Date.now() - lastUpdateTime < throttleTime) return;
+                lastUpdateTime = Date.now();
+                CurrentPosition = [position.coords.longitude, position.coords.latitude];
+                userPoint.push({
+                    type : 'Feature',
+                    geometry : {
+                        type : 'Point',
+                        coordinates : [CurrentPosition]
+                    }
+                })
+                // call function to show matching coords on route here to return geoJSON with points
+                const userPointGeoJSON = { type: 'FeatureCollection', features: userPoint };
+                console.log(userPointGeoJSON);
+                map.flyTo({ center: CurrentPosition, zoom: 14 });
+                // userPoint.pop();
+                const CurrentuserPointGeoJSON = keepLatestCoordinate(userPointGeoJSON);
+                console.log(CurrentuserPointGeoJSON);
+                // var distance = DistanceFromUser2Point(CurrentPosition);
+                nearestPoint(Threshold, matchedcleanedPointsGeoJSON, CurrentPosition);
+
+            }
+
+
+            function nearestPoint (Threshold, matchedcleanedPointsGeoJSON, UserLocationGeoJSON){
+                var minDistance = 0;
+                var tempDistance
+                var coordinates = []
+                var tempGeoJSON = {
+                    "type" : "Feature",
+                    "properties": {},
+                    "geometry" : {
+                        "type" : "Point",
+                        "coordinates" : []
+                    }
+                }
+
+                matchedcleanedPointsGeoJSON.features.forEach((feature) => {
+                    coordinates = feature.geometry.coordinates;
+                    var tempGeoJSON = {
+                        "type" : "Feature",
+                        "properties": {},
+                        "geometry" : {
+                            "type" : "Point",
+                            "coordinates" : coordinates
+                        }
+                    }
+                    var distance = DistanceFromUser2Point(UserLocationGeoJSON, tempGeoJSON)
+                    if ( distance < Threshold ){
+                        map.addSource('tempGeoJSON', {
+                            type : 'geojson',
+                            data : tempGeoJSON
+                        })
+
+                        map.addLayer({
+                            id : 'close-points',
+                            source : 'tempGeoJSON',
+                            type : 'circle',
+                            paint : {
+                                'circle-color' : '#f5425a'
+                            }
+                        })
+                    }
+                });
+            }
+
+
+            function DistanceFromUser2Point(CurrentPosition, Coord = TestPoint){
+                var distance = turf.distance(CurrentPosition, Coord);
+                return distance;
+            }
+
+
+            function keepLatestCoordinate(geoJSON) {
+                if (!geoJSON || !geoJSON.features) {
+                    console.error("Invalid GeoJSON object");
+                    return null;
+                }
+
+                // Get the last feature with a Point geometry
+                const latestFeature = geoJSON.features.reverse().find(feature => 
+                    feature.geometry.type === 'Point'
+                );
+
+                if (!latestFeature) {
+                    console.error("No Point features found in the GeoJSON.");
+                    return null;
+                }
+
+                // Create a new GeoJSON with only the latest feature
+                const updatedGeoJSON = {
+                    type: "FeatureCollection",
+                    features: [latestFeature]
+                };
+
+                return updatedGeoJSON;
+            }
+
+            
+            navigator.geolocation.watchPosition(updateUserLocation, console.error, {
+                enableHighAccuracy: true,
+                timeout: 5000,
+                maximumAge: 0
+            });
+
+
+            // add stuff to map
+
+            map.addSource('leg-line', {
+                type : 'geojson',
+                data : legsGeoJSON 
+            })
+
+            map.addLayer({
+                id : 'route-leg-layer',
+                source : 'leg-line',
+                type : 'line',
+                paint : {
+                    'line-width' : 4,
+                    'line-color' : '#00fff7'
+                }
+            })
+
+            /*map.addSource('sec43Geojson-data', {
+            type : 'geojson',
+            data : sec43Geojson
+            })
+
+            map.addLayer({
+            id : 'sec43-points',
+            source : 'sec43Geojson-data',
+            type : 'circle',
+            paint : {
+                'circle-color' : '#ffdd00'
+            }
+            })*/
+
+            map.addSource('matchedcleanedPointsGeoJSON', {
+                type : 'geojson',
+                data : matchedcleanedPointsGeoJSON
+            })
+
+            map.addLayer({
+                id : 'matching-points',
+                source : 'matchedcleanedPointsGeoJSON',
+                type : 'circle',
+                paint : {
+                    'circle-color' : '#4ee64e'
+                }
+            })
+        });
+    }
+
+
+    initializeMap();
+</script>
+
+</body>
+</html>
